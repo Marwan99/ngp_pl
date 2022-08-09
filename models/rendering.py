@@ -57,7 +57,6 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
     """
     exp_step_factor = kwargs.get('exp_step_factor', 0.)
     results = {}
-
     # output tensors to be filled in
     N_rays = len(rays_o)
     device = rays_o.device
@@ -79,6 +78,18 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
         N_samples = max(min(N_rays//N_alive, 64), min_samples)
         samples += N_samples
 
+        # print("rays_o:\n", rays_o)
+        # print("rays_d:\n", rays_d)
+        # print("hits_t:\n", hits_t[:, 0])
+        # print("alive_indices:\n", alive_indices)
+        # print("model.density_bitfield:\n", model.density_bitfield)
+        # print("model.cascades:\n", model.cascades)          
+        # print("model.scale:\n", model.scale)
+        # print("exp_step_factor:\n", exp_step_factor)
+        # print("model:\n", model.grid_size)
+        # print("MAX_SAMPLES:\n", MAX_SAMPLES)
+        # print("N_samples:\n", N_samples)
+
         xyzs, dirs, deltas, ts, N_eff_samples = \
             vren.raymarching_test(rays_o, rays_d, hits_t[:, 0], alive_indices,
                                   model.density_bitfield, model.cascades,
@@ -88,7 +99,7 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
         xyzs = rearrange(xyzs, 'n1 n2 c -> (n1 n2) c')
         dirs = rearrange(dirs, 'n1 n2 c -> (n1 n2) c')
         valid_mask = ~torch.all(dirs==0, dim=1)
-        if valid_mask.sum()==0: break
+        if valid_mask.sum()==0: print("lol"); break
 
         sigmas = torch.zeros(len(xyzs), device=device)
         rgbs = torch.zeros(len(xyzs), 3, device=device)

@@ -9,20 +9,24 @@ from .rendering import NEAR_DISTANCE
 
 
 class NGP(nn.Module):
-    def __init__(self, scale, rgb_act='Sigmoid'):
+    def __init__(self, scale, rgb_act='Sigmoid', offset=None):
         super().__init__()
 
         self.rgb_act = rgb_act
 
         # scene bounding box
         self.scale = scale
-        self.register_buffer('center', torch.zeros(1, 3))
-        self.register_buffer('xyz_min', -torch.ones(1, 3)*scale)
-        self.register_buffer('xyz_max', torch.ones(1, 3)*scale)
+        if offset is None:
+            offset = torch.zeros(1, 3)
+
+        self.register_buffer('center', offset)
+        self.register_buffer('xyz_min', -torch.ones(1, 3)*scale/2 + offset)
+        self.register_buffer('xyz_max', torch.ones(1, 3)*scale/2  + offset)
         self.register_buffer('half_size', (self.xyz_max-self.xyz_min)/2)
 
         # each density grid covers [-2^(k-1), 2^(k-1)]^3 for k in [0, C-1]
-        self.cascades = max(1+int(np.ceil(np.log2(2*scale))), 1)
+        self.cascades = max(1+int(np.ceil(np.log2(2*scale))), 1) - 1
+        print("Cascades: ", self.cascades)
         self.grid_size = 128
         self.register_buffer('density_bitfield',
             torch.zeros(self.cascades*self.grid_size**3//8, dtype=torch.uint8))
@@ -30,11 +34,13 @@ class NGP(nn.Module):
         # constants
         L = 16; F = 2; log2_T = 19; N_min = 16
         b = np.exp(np.log(2048*scale/N_min)/(L-1))
+        print("b:", b)
         print(f'GridEncoding: Nmin={N_min} b={b:.5f} F={F} T=2^{log2_T} L={L}')
 
         self.xyz_encoder = \
             tcnn.NetworkWithInputEncoding(
-                n_input_dims=3, n_output_dims=16,
+                n_input_dims=3,
+                n_output_dims=16,
                 encoding_config={
                     "otype": "Grid",
 	                "type": "Hash",
@@ -42,8 +48,7 @@ class NGP(nn.Module):
                     "n_features_per_level": F,
                     "log2_hashmap_size": log2_T,
                     "base_resolution": N_min,
-                    "per_level_scale": b,
-                    "interpolation": "Linear"
+                    "per_level_scale": b
                 },
                 network_config={
                     "otype": "FullyFusedMLP",
@@ -65,11 +70,12 @@ class NGP(nn.Module):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=3,
+                n_input_dims=32,
+                n_output_dims=3,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
-                    "output_activation": self.rgb_act,
+                    "output_activation": "None",
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 }
@@ -100,6 +106,7 @@ class NGP(nn.Module):
             sigmas: (N)
         """
         x = (x-self.xyz_min)/(self.xyz_max-self.xyz_min)
+        # x = (x-self.xyz_min)
         h = self.xyz_encoder(x)
         sigmas = TruncExp.apply(h[:, 0])
         if return_feat: return sigmas, h
@@ -143,11 +150,14 @@ class NGP(nn.Module):
         d = self.dir_encoder((d+1)/2)
         rgbs = self.rgb_net(torch.cat([d, h], 1))
 
-        if self.rgb_act == 'None': # rgbs is log-radiance
-            if kwargs.get('output_radiance', False): # output HDR map
-                rgbs = TruncExp.apply(rgbs)
-            else: # convert to LDR using tonemapper networks
-                rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
+        # rgbs = 1.0 / (1.0 + torch.exp(-rgbs))
+        rgbs = torch.sigmoid(rgbs)
+
+        # if self.rgb_act == 'None': # rgbs is log-radiance
+        #     if kwargs.get('output_radiance', False): # output HDR map
+        #         rgbs = TruncExp.apply(rgbs)
+        #     else: # convert to LDR using tonemapper networks
+        #         rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
 
         return sigmas, rgbs
 
